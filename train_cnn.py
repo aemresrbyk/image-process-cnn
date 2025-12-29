@@ -6,14 +6,15 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from sklearn.utils import class_weight
 
 # Configuration
 TRAIN_DIR = "dataset/train"
 TEST_DIR = "dataset/test"
 IMG_SIZE = 48
 BATCH_SIZE = 64
-EPOCHS = 30  # Increased epochs for better convergence, EarlyStopping will handle overtraining
+EPOCHS = 50  # Increased for better convergence
 
 def train_cnn_model():
     print("Initializing Data Generators...")
@@ -53,6 +54,15 @@ def train_cnn_model():
     )
     
     print(f"Classes: {train_generator.class_indices}")
+    
+    # Calculate Class Weights to handle imbalance
+    class_weights = class_weight.compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(train_generator.classes),
+        y=train_generator.classes
+    )
+    class_weights_dict = dict(enumerate(class_weights))
+    print(f"Class Weights: {class_weights_dict}")
     
     # Build CNN Architecture
     # Inspired by VGG/MiniXception blocks for FER
@@ -104,7 +114,9 @@ def train_cnn_model():
     
     # Callbacks
     checkpoint = ModelCheckpoint("emotion_model_cnn.keras", monitor='val_accuracy', save_best_only=True, mode='max', verbose=1)
-    early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True, verbose=1)
+    checkpoint = ModelCheckpoint("emotion_model_cnn.keras", monitor='val_accuracy', save_best_only=True, mode='max', verbose=1)
+    early_stop = EarlyStopping(monitor='val_loss', patience=12, restore_best_weights=True, verbose=1)
+    reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.00001, verbose=1)
     
     print("Starting Training...")
     
@@ -114,7 +126,8 @@ def train_cnn_model():
         epochs=EPOCHS,
         validation_data=validation_generator,
         validation_steps=validation_generator.samples // BATCH_SIZE,
-        callbacks=[checkpoint, early_stop]
+        callbacks=[checkpoint, early_stop, reduce_lr],
+        class_weight=class_weights_dict
     )
     
     print("Training Complete. Model saved as emotion_model_cnn.keras")

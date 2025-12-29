@@ -1,121 +1,141 @@
 import cv2
-import os
 import numpy as np
-
-# ---- DIP FUNCTION ----
+import pickle
+import tensorflow as tf
 from skimage.feature import local_binary_pattern
-import joblib
 
-# Global SVM model
-svm_model = None
-MODEL_PATH = "emotion_model.pkl"
+# utils.py dosyasından fonksiyonları çekiyoruz
+# (Bu dosyanın proje klasöründe olduğundan emin ol)
+from utils import apply_dip_preprocessing, apply_post_processing_filters
 
-try:
-    if os.path.exists(MODEL_PATH):
-        svm_model = joblib.load(MODEL_PATH)
-        print(f"Model loaded: {MODEL_PATH}")
-    else:
-        print(f"Model not found at {MODEL_PATH}")
-except Exception as e:
-    print(f"Error loading model: {e}")
+# --- AYARLAR ---
+# True:  Yeni eğittiğin Transfer Learning (MobileNetV2) modelini kullanır. (Tavsiye Edilen)
+# False: Eski Klasik (LBP + SVM) modelini kullanır.
+USE_TRANSFER_LEARNING = True 
 
-def extract_lbp_texture(img):
-    # LBP Parameters
+# Model Girdi Boyutları
+IMG_SIZE_TL = 96   # MobileNetV2 için (96x96)
+IMG_SIZE_SVM = 48  # SVM/LBP için (48x48)
+
+# Duygu Etiketleri
+EMOTIONS = {0: 'Angry', 1: 'Disgust', 2: 'Fear', 3: 'Happy', 
+            4: 'Neutral', 5: 'Sad', 6: 'Surprise'}
+
+# --- MODEL YÜKLEME ---
+model = None
+
+if USE_TRANSFER_LEARNING:
+    print("MOD: Transfer Learning (MobileNetV2) başlatılıyor...")
+    model_path ="emotion_model_transfer_tuned.keras"
+    try:
+        model = tf.keras.models.load_model(model_path)
+        print(f"BAŞARILI: {model_path} yüklendi.")
+    except Exception as e:
+        print(f"HATA: {model_path} yüklenemedi!")
+        print("Lütfen 'python train_transfer.py' kodunu çalıştırıp modeli eğittiğinden emin ol.")
+        exit()
+else:
+    print("MOD: Klasik Yöntem (LBP + SVM) başlatılıyor...")
+    model_path = "emotion_model.pkl"
+    try:
+        with open(model_path, "rb") as f:
+            model = pickle.load(f)
+        print(f"BAŞARILI: {model_path} yüklendi.")
+    except Exception as e:
+        print(f"HATA: {model_path} yüklenemedi!")
+        print("Lütfen 'python train_model.py' kodunu çalıştırıp modeli eğittiğinden emin ol.")
+        exit()
+
+# --- YARDIMCI FONKSİYON (Sadece Klasik Mod İçin) ---
+def extract_lbp_feature_single(image):
+    """Tek bir resimden LBP histogramı çıkarır (SVM tahmini için)"""
     radius = 3
-    n_points = 8 * radius
-    method = 'uniform'
-    
-    # Grayscale dönüşümü (Doku analizi için)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # LBP Hesaplama
-    lbp = local_binary_pattern(gray, n_points, radius, method)
-    
-    # SVM için özellik vektörü (Histogram)
-    # Uniform LBP için olası değer sayısı P + 2 dir.
-    # Bu sayıyı sabit tutmalıyız ki vektör boyutu her resim için aynı olsun.
-    n_bins = int(n_points + 2)
-    hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins), density=True)
-    
-    return lbp, hist
+    n_points = 24
+    # LBP hesapla
+    lbp = local_binary_pattern(image, n_points, radius, method="uniform")
+    # Histogram oluştur
+    (hist, _) = np.histogram(lbp.ravel(), bins=np.arange(0, n_points + 3), range=(0, n_points + 2))
+    hist = hist.astype("float")
+    hist /= (hist.sum() + 1e-7) # Normalize et
+    return hist.reshape(1, -1) # SVM tek satırlık veri bekler
 
-def preprocess_frame(img):
-    # 1. Gürültü Azaltma (Noise Reduction)
-    smoothed = cv2.GaussianBlur(img, (5, 5), 0)
-
-    # 2. Histogram Eşitleme (Histogram Equalization)
-    img_yuv = cv2.cvtColor(smoothed, cv2.COLOR_BGR2YUV)
-    img_yuv[:,:,0] = cv2.equalizeHist(img_yuv[:,:,0])
-    result = cv2.cvtColor(img_yuv, cv2.COLOR_YUV2BGR)
-    
-    return result
-
-# ---- FACE DETECTION ----
+# --- ANA KAMERA DÖNGÜSÜ ---
+# Yüz Tespiti için Haar Cascade yükle
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-if __name__ == "__main__":
-    cap = cv2.VideoCapture(0)  # webcam
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+cap = cv2.VideoCapture(0)
 
-        # 1. Face Detection
-        gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray_full, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+print("\n--- KAMERA AÇILIYOR ---")
+print("Çıkış için 'q' tuşuna basınız.")
 
-        processed_face_display = np.zeros((200, 200, 3), dtype=np.uint8)
-        lbp_display_bgr = np.zeros((200, 200, 3), dtype=np.uint8)
-        ai_result = "No Face"
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Kameradan görüntü alınamadı!")
+        break
 
-        for (x, y, w, h) in faces:
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
-            face_roi = frame[y:y+h, x:x+w]
-            
-            # Process Face
-            cleaned_face = preprocess_frame(face_roi)
-            processed_face_display = cv2.resize(cleaned_face, (200, 200))
-            lbp_map, lbp_hist = extract_lbp_texture(cleaned_face)
-            
-            # LBP Visualization
-            lbp_norm = (lbp_map / lbp_map.max() * 255).astype(np.uint8)
-            lbp_display_bgr = cv2.cvtColor(lbp_norm, cv2.COLOR_GRAY2BGR)
-            lbp_display_bgr = cv2.resize(lbp_display_bgr, (200, 200))
-            
-            # AI Prediction
-            if svm_model:
-                # Reshape for single sample
-                prediction = svm_model.predict([lbp_hist])
-                ai_result = prediction[0]
-            else:
-                ai_result = "Model Not Loaded"
-                
-            break
+    # Yüz tespiti gri görüntüde yapılır
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray_frame, scaleFactor=1.3, minNeighbors=5)
 
-        # ---- VISUALIZATION ----
-        # Ana ekrana AI sonucunu yaz
-        cv2.putText(frame, f"Emotion: {ai_result}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    current_emotion = "Neutral" # Varsayılan
 
-        # Yan paneli oluştur (Bulunan yüz işlemleri)
-        # processed_face_display ve lbp_display_bgr alt alta birleştir
-        side_panel = np.vstack((processed_face_display, lbp_display_bgr))
+    for (x, y, w, h) in faces:
+        roi = frame[y:y+h, x:x+w] # Yüz bölgesini (Renkli) kes
         
-        # Ana pencereye sığdırmak için height eşitleme yapılabilir ama şimdilik ayrı bir pencere veya yanına ekleme yapalım
-        # Basitlik için: Ana frame + Yan panel (yükseklik uyuşmazlığını dolgu ile çözmek yerine basitçe resize yapalım)
+        # --- TAHMİN BÖLÜMÜ (AI) ---
         
-        # Ana frame'i biraz küçültelim ki sığsın
-        frame_resized = cv2.resize(frame, (640, 480))
-        side_panel_resized = cv2.resize(side_panel, (200, 480))
+        if USE_TRANSFER_LEARNING:
+            # 1. Transfer Learning (MobileNetV2) için Hazırlık
+            # Model RGB ve 96x96 boyut istiyor.
+            # OpenCV BGR okur, RGB'ye çevirelim (Daha doğru renk analizi için)
+            roi_rgb = cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)
+            roi_resized = cv2.resize(roi_rgb, (IMG_SIZE_TL, IMG_SIZE_TL))
+            
+            # Normalizasyon (0-1 arası) ve Boyut Ekleme (Batch dimension)
+            img_pixels = np.expand_dims(roi_resized, axis=0)
+            img_pixels = img_pixels / 255.0
+            
+            # Tahmin
+            preds = model.predict(img_pixels, verbose=0)
+            max_index = np.argmax(preds[0])
+            current_emotion = EMOTIONS[max_index]
+            confidence = preds[0][max_index] # Güven oranı (isteğe bağlı kullanılabilir)
+            
+        else:
+            # 2. Klasik Yöntem (LBP + SVM) için Hazırlık
+            # Model 48x48 ve Gri istiyor.
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            roi_resized = cv2.resize(roi_gray, (IMG_SIZE_SVM, IMG_SIZE_SVM))
+            
+            # DIP Preprocessing (utils.py'den geliyor - Histogram Eşitleme vb.)
+            processed_roi = apply_dip_preprocessing(roi_resized)
+            
+            # LBP Özelliği Çıkar
+            lbp_hist = extract_lbp_feature_single(processed_roi)
+            
+            # Tahmin
+            pred_idx = model.predict(lbp_hist)[0]
+            current_emotion = EMOTIONS[pred_idx]
+
+        # --- GÖRSELLEŞTİRME ---
+        # Yüzün etrafına kutu çiz
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
         
-        final_view = np.hstack((frame_resized, side_panel_resized))
+        # Duyguyu yaz
+        label_text = f"{current_emotion}"
+        cv2.putText(frame, label_text, (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+        
+        # --- POST-PROCESSING (Görsel Filtreler) ---
+        # Duyguya göre ekranı renklendir veya efekt ver (utils.py)
+        frame = apply_post_processing_filters(frame, (x, y, w, h), current_emotion)
 
-        cv2.imshow("Emotion Recognition Pipeline", final_view)
+    # Ekrana bas
+    cv2.imshow('Final Project: DIP + AI Emotion Recognition', frame)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    # 'q' ile çık
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-    cap.release()
-    cv2.destroyAllWindows()
-
-
+cap.release()
+cv2.destroyAllWindows()

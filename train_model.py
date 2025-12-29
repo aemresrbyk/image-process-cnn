@@ -2,30 +2,54 @@ import cv2
 import numpy as np
 import os
 import joblib
-from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
 from skimage.feature import local_binary_pattern
 
-# Import functions from main.py
-# (Ensure main.py is in the same directory)
-from main import preprocess_frame, extract_lbp_texture
+# Import DIP preprocessing from utils
+from utils import apply_dip_preprocessing
 
 # Configuration
 DATASET_PATH = "dataset/train"
 MODEL_FILENAME = "emotion_model.pkl"
 FACE_CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-SAMPLES_PER_CLASS = 100000  # Use all data (max ~7000 in happy folder)
+SAMPLES_PER_CLASS = 100000  # Use all data
+
+def extract_lbp_features(image):
+    """
+    Extracts LBP features with radius=3, n_points=24.
+    """
+    radius = 3
+    n_points = 24  # 8 * radius, keeping consistent with request
+    method = 'uniform'
+    
+    # Check if image is color, if so convert to gray (though preprocessing should handle it)
+    if len(image.shape) == 3:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = image
+
+    lbp = local_binary_pattern(gray, n_points, radius, method)
+    
+    # Calculate histogram
+    # For 'uniform' method, number of bins = n_points + 2
+    n_bins = int(n_points + 2)
+    hist, _ = np.histogram(lbp.ravel(), bins=n_bins, range=(0, n_bins), density=True)
+    
+    return hist
 
 def train_svm_model():
     print("Loading dataset and extracting features...")
     
-    face_cascade = cv2.CascadeClassifier(FACE_CASCADE_PATH)
-    
     X = []
     y = []
     
-    # Traverse through emotion folders (angry, happy, etc.)
+    # Traverse through emotion folders
+    if not os.path.exists(DATASET_PATH):
+        print(f"Error: Dataset path '{DATASET_PATH}' does not exist.")
+        return
+
     for emotion_label in os.listdir(DATASET_PATH):
         emotion_dir = os.path.join(DATASET_PATH, emotion_label)
         
@@ -34,52 +58,88 @@ def train_svm_model():
             
         print(f"Processing Class: {emotion_label}")
         
-        count = 0
+        # 1. Load all images for this class first
+        class_images = []
         for image_name in os.listdir(emotion_dir):
-            if count >= SAMPLES_PER_CLASS:
-                break
-                
             if not image_name.lower().endswith(('.jpg', '.jpeg', '.png')):
                 continue
-            
             image_path = os.path.join(emotion_dir, image_name)
-            
-            # 1. Load Image (Grayscale by default for FER dataset)
             img = cv2.imread(image_path)
-            if img is None:
-                continue
+            if img is not None:
+                class_images.append(img)
+        
+        # Limit to SAMPLES_PER_CLASS if we have too many
+        if len(class_images) > SAMPLES_PER_CLASS:
+            class_images = class_images[:SAMPLES_PER_CLASS]
             
-            # Note: FER images are already 48x48 cropped faces.
-            # We DONT need to detect faces again (it will fail on 48x48).
-            # We can use the image directly.
+        # 2. Data Augmentation for Minority Classes
+        # If we have fewer than MIN_SAMPLES, synthetically generate more!
+        MIN_SAMPLES = 3000
+        current_count = len(class_images)
+        
+        if current_count < MIN_SAMPLES and current_count > 0:
+            print(f"  -> Augmenting {emotion_label} from {current_count} to {MIN_SAMPLES} samples...")
+            diff = MIN_SAMPLES - current_count
             
-            # 2. Preprocessing & Texture
-            # Resize slightly up for better Gaussian/LBP calculation if needed, 
-            # but 48x48 is fine. LBP radius=3 might be too big for 48x48.
-            # Let's resize to 100x100 for consistency with our pipeline.
-            target_face = cv2.resize(img, (100, 100))
+            # Simple augmentation loop
+            for i in range(diff):
+                # Pick a random original image
+                orig_img = class_images[i % current_count]
+                
+                # Apply Random Augmentations
+                aug_img = orig_img.copy()
+                
+                # Random Flip
+                if np.random.rand() > 0.5:
+                    aug_img = cv2.flip(aug_img, 1) # Horizontal flip
+                
+                # Random Noise (Gaussian)
+                if np.random.rand() > 0.5:
+                    gauss = np.random.normal(0, 10, aug_img.shape).astype('uint8')
+                    # Add noise with clipping
+                    aug_img = cv2.add(aug_img, gauss)
+                
+                # Random Brightness
+                if np.random.rand() > 0.5:
+                    value = np.random.randint(-30, 30)
+                    if value > 0:
+                        aug_img = np.minimum(aug_img + value, 255).astype('uint8')
+                    else:
+                        aug_img = np.maximum(aug_img + value, 0).astype('uint8')
+                        
+                class_images.append(aug_img)
+
+        # 3. Process All Images (Original + Augmented)
+        count = 0
+        for img in class_images:
+            # Apply DIP Preprocessing
+            processed_img = apply_dip_preprocessing(img)
             
-            cleaned_face = preprocess_frame(target_face)
-            
-            # 3. Feature Extraction (LBP)
-            _, lbp_hist = extract_lbp_texture(cleaned_face)
+            # Extract Features (LBP)
+            lbp_hist = extract_lbp_features(processed_img)
             
             X.append(lbp_hist)
             y.append(emotion_label)
             count += 1
+        
+        print(f"  -> Features extracted: {count}")
 
     X = np.array(X)
     y = np.array(y)
     
+    if len(X) == 0:
+        print("No images found. Check dataset path.")
+        return
+
     print(f"Total samples: {len(X)}")
     print(f"Classes found: {np.unique(y)}")
     
     # Train/Test Split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    print("Training SVM Model...")
-    # Using RBF kernel because texture data is complex
-    svm = SVC(kernel='rbf', C=10, gamma='scale', probability=True, random_state=42)
+    print("Training LinearSVC Model...")
+    # Using LinearSVC as requested
+    svm = LinearSVC(random_state=42, max_iter=2000, class_weight='balanced') # Increased max_iter for convergence, added balanced weights
     svm.fit(X_train, y_train)
     
     print("Evaluating Model...")
