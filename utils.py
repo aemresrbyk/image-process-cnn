@@ -3,75 +3,66 @@ import numpy as np
 
 def apply_dip_preprocessing(image):
     """
-    DIP (Digital Image Processing) Ön İşleme Adımları
+    Applies Digital Image Processing (DIP) techniques to preprocess the image for the model.
+    Steps:
+    1. Convert to Grayscale (if needed).
+    2. Apply Histogram Equalization (to improve contrast).
+    3. Apply Gaussian Blur (kernel size 3x3, to remove noise).
+    
+    Args:
+        image: Input image (numpy array).
+        
+    Returns:
+        Processed image.
     """
-    # 1. Griye çevir (Eğer renkliyse)
-    if len(image.shape) == 3:
+    # 1. Convert to Grayscale if the image has 3 channels
+    if len(image.shape) == 3 and image.shape[2] == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image
-    
-    # 2. Histogram Eşitleme (Kontrast artırma)
+
+    # 2. Apply Histogram Equalization
+    # Improves contrast by stretching the intensity range
     equ = cv2.equalizeHist(gray)
-    
-    # 3. Gaussian Blur (Gürültü azaltma)
+
+    # 3. Apply Gaussian Blur
+    # Removes high-frequency noise which can confuse the model
     blurred = cv2.GaussianBlur(equ, (3, 3), 0)
-    
+
     return blurred
 
 def apply_post_processing_filters(frame, face_coords, emotion):
     """
-    Görsel Efektler (YAZILAR KALDIRILDI)
-    Sadece görüntüye renk/efekt verir, yazı yazmaz.
+    Applies visual effects (color filters) to the frame based on the detected emotion.
+    
+    Args:
+        frame: The original video frame.
+        face_coords: Tuple (x, y, w, h) of the detected face.
+        emotion: The detected emotion string ('happy', 'sad', 'angry', 'neutral').
+        
+    Returns:
+        The frame with the applied filter.
     """
-    x, y, w, h = [int(c) for c in face_coords]
+    x, y, w, h = face_coords
     
-    # Koordinat kontrolü (Ekran dışına taşma engelleme)
-    rows, cols, _ = frame.shape
-    if x < 0 or y < 0 or x+w > cols or y+h > rows:
-        return frame
-
-    roi = frame[y:y+h, x:x+w]
-    if roi.size == 0: return frame
+    # Define colors for emotions (BGR format)
+    colors = {
+        'happy': (0, 255, 255),    # Yellow
+        'sad': (255, 0, 0),        # Blue
+        'angry': (0, 0, 255),      # Red
+        'neutral': (128, 128, 128) # Gray
+    }
     
-    # --- SADECE GÖRSEL EFEKTLER (Yazı kodları silindi) ---
-
-    if emotion == 'Happy':
-        # Efekt: Sarı/Sıcak Ton
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        hsv[:, :, 1] = cv2.add(hsv[:, :, 1], 40)
-        roi = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-
-    elif emotion == 'Sad':
-        # Efekt: Mavi Ton
-        blue_tint = np.zeros_like(roi)
-        blue_tint[:, :, 0] = 50 
-        roi = cv2.add(roi, blue_tint)
-
-    elif emotion == 'Angry':
-        # Efekt: Kırmızı Ton + Keskinleştirme
-        red_tint = np.zeros_like(roi)
-        red_tint[:, :, 2] = 40 
-        roi = cv2.add(roi, red_tint)
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-        roi = cv2.filter2D(roi, -1, kernel)
+    color = colors.get(emotion, (255, 255, 255)) # Default white
     
-    elif emotion == 'Surprise':
-        # Efekt: Negatif (Ters Renkler)
-        roi = cv2.bitwise_not(roi)
+    # Create an overlay
+    overlay = frame.copy()
     
-    elif emotion == 'Fear':
-        # Efekt: Mor/Karanlık
-        roi = cv2.addWeighted(roi, 0.5, np.zeros_like(roi), 0.5, -50)
+    # Draw a colored rectangle over the face area
+    cv2.rectangle(overlay, (x, y), (x + w, y + h), color, -1)
     
-    else:
-        # Neutral - Hiçbir şey yapma
-        pass
-
-    # İşlenmiş ROI'yi geri yapıştır
-    try:
-        frame[y:y+h, x:x+w] = roi
-    except:
-        pass
-
+    # Blend the overlay with the original frame (transparency)
+    alpha = 0.3  # Transparency factor
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    
     return frame
