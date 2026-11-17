@@ -10,7 +10,8 @@ import numpy as np
 TEST_DIR = "dataset/test"
 IMG_SIZE = 48
 BATCH_SIZE = 64
-MODEL_PATH = "emotion_model_cnn.keras"
+MODEL_PATH = "emotion_model_final.keras"
+CLASSES = ["happy", "sad", "angry", "neutral"]  # must match train_final.py order
 
 def evaluate_model():
     if not os.path.exists(MODEL_PATH):
@@ -37,6 +38,7 @@ def evaluate_model():
         batch_size=BATCH_SIZE,
         color_mode="grayscale",
         class_mode='categorical',
+        classes=CLASSES,
         shuffle=False  # Important for confusion matrix
     )
 

@@ -28,7 +28,7 @@ Reading emotion from a face is useful wherever a system should react to the pers
 ## Run it
 
 ```bash
-pip install -r requirements.txt tensorflow
+pip install -r requirements.txt
 python main.py            # webcam demo, press q to quit
 ```
 
@@ -48,7 +48,7 @@ python train_final.py     # writes emotion_model_final.keras
 | `main.py` | Live webcam demo |
 | `utils.py` | Preprocessing (equalization, blur) and the colour overlay |
 | `train_final.py` | Mini-Xception model and training |
-| `evaluate_cnn.py`, `quick_eval.py` | Accuracy and per-class report on the test set |
+| `evaluate_cnn.py` | Accuracy and per-class report on the test set |
 | `download_data.py` | Dataset download |
 
 ## Limits

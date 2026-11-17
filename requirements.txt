@@ -1,8 +1,5 @@
 opencv-python
 numpy
-pandas
 scikit-learn
-scipy
-seaborn
-matplotlib
-keras
+tensorflow
+kagglehub
