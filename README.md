@@ -39,7 +39,7 @@ python download_data.py   # fetches the dataset into dataset/
 python train_final.py     # writes emotion_model_final.keras
 ```
 
-`colab_training.py` is a version of the training script for Google Colab (free GPU).
+`colab_training.py` trains the earlier plain-CNN baseline on Google Colab (free GPU).
 
 ## Files
 
